@@ -255,14 +255,14 @@
           <p><code>python -m venv .venv</code><br>
           <code>.\.venv\Scripts\Activate.ps1</code><br>
           <code>pip install -r requirements.txt</code><br>
-          <code>$env:GOOGLE_API_KEY="..."</code><br>
-          <code>cd src; python main.py --part 1|2|3|4</code></p>
+          <code># Điền NVIDIA_NIM_API_KEY trong .env</code><br>
+          <code>cd src; python main.py --part 1|2|3|4|5</code></p>
         </div>
         <div class="li"><span class="dot">•</span><span>Bộ công cụ dùng trong bài:</span></div>
         <div class="chips">
           <span class="chip on">Google ADK</span>
           <span class="chip on">NeMo Guardrails (NVIDIA · Colang)</span>
-          <span class="chip on">Gemini 3.1 Flash Lite</span>
+          <span class="chip on">NVIDIA NIM (qua LiteLLM)</span>
         </div>
         <div class="pill">⚠️ Agent "unsafe" trong bài <b>cố tình</b> nhúng sẵn mật khẩu/API key giả trong system prompt để bạn thấy hậu quả thật — đây không phải secret thật</div>
       </div>

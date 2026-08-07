@@ -21,6 +21,7 @@ from agents.guards_agent import (  # noqa: E402
     detect_injection_strong,
     topic_filter_strong,
 )
+from core.config import setup_api_key  # noqa: E402
 from attacks.attacks import classify_attack_outcome, write_run_attack_json  # noqa: E402
 from core.utils import chat_with_agent  # noqa: E402
 
@@ -47,7 +48,7 @@ def offline_gate(prompt: str) -> str:
 
 
 async def live_attack(prompts_to_try: list[tuple[str, str]]) -> list[dict]:
-    os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "0")
+    setup_api_key()
     agent, runner = create_guards_agent()
     print("\n=== LIVE attacks on Guards Agent ===\n")
     results = []
@@ -117,8 +118,9 @@ async def main() -> None:
             pass_live.append((name, prompt))
         print()
 
-    key = os.environ.get("GOOGLE_API_KEY", "").strip()
-    if not key:
+    provider = os.environ.get("LLM_PROVIDER", "").strip().lower()
+    key = os.environ.get("NVIDIA_NIM_API_KEY", "").strip()
+    if provider != "nvidia_nim" or not key:
         print(
             "No GOOGLE_API_KEY / .env — stopped before live LLM calls.\n"
             "Add key to .env then re-run: python scripts/demo_attack_guards.py"

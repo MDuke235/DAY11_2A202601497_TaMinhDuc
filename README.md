@@ -15,9 +15,9 @@ Làm sao để ứng dụng agent an toàn hơn?
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# 2) API key
+# 2) Cấu hình NVIDIA NIM
 Copy-Item .env.example .env
-# Mở .env, dán GOOGLE_API_KEY — lấy tại https://aistudio.google.com/apikey
+# Mở .env và điền NVIDIA_NIM_API_KEY cùng MSSV của bạn.
 
 # 3) Cài dependency trong venv
 python -m pip install -U pip
@@ -26,14 +26,20 @@ pip install -r requirements.txt
 
 Mỗi lần mở terminal mới: `.\.venv\Scripts\Activate.ps1` rồi mới chạy code.
 
-Nếu PowerShell báo không cho chạy script:  
-`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+### Cấu hình NVIDIA NIM cho workspace này
 
-PowerShell (nếu chưa load `.env`):
+Workspace này dùng NVIDIA NIM. Trong `.env`, đặt `LLM_PROVIDER=nvidia_nim`,
+`NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_BASE`, `NVIDIA_NIM_MODEL` và
+`STUDENT_ID`. `main.py` tự nạp các biến này; không cần đặt `GOOGLE_API_KEY`.
 
 ```powershell
-$env:GOOGLE_API_KEY="dán-key-của-bạn"
+cd src
+python .\main.py --part 1
 ```
+
+Nếu PowerShell báo không cho chạy script:
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+
 
 ---
 
@@ -66,7 +72,7 @@ Hình thức: **cá nhân** (1 người / 1 MSSV). Luồng: **Setup → A → Br
 
 | # | Phần | Nội dung | Thời lượng |
 |---|------|----------|-----------:|
-| 0 | **Setup** | Cài đặt môi trường (`pip`, `GOOGLE_API_KEY`, chạy local) | 30' |
+| 0 | **Setup** | Cài đặt môi trường (`pip`, `NVIDIA_NIM_API_KEY`, chạy local) | 30' |
 | 1 | **A · Phòng thủ** | 2A Input · 2B Output · 2C NeMo · Part 3 Testing · Part 4 HITL | 120' |
 | — | **Break** | Nghỉ giải lao | 10' |
 | 2 | **B · Tấn công** | Tấn công **Unsafe** (điểm B) + **Guards** (điểm cộng nếu LEAKED) | 60' |
@@ -189,3 +195,13 @@ Nộp theo [`SUBMISSION.md`](SUBMISSION.md).
 - [NeMo Guardrails](https://github.com/NVIDIA/NeMo-Guardrails)
 - [Google ADK](https://google.github.io/adk-docs/)
 - [AI Safety Fundamentals](https://aisafetyfundamentals.com/)
+## Chạy chatbot web
+
+Chatbot web dùng **protected agent** cùng rate limit, input/output guardrail, LLM-as-Judge và audit cho từng phiên trình duyệt. Cấu hình NVIDIA NIM được tự nạp từ `.env`.
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+streamlit run app.py
+```
+
+Sau khi lệnh khởi động, mở địa chỉ Streamlit in trong terminal (mặc định là `http://localhost:8501`). Không đưa `.env` hoặc NVIDIA NIM API key lên GitHub hay dịch vụ deploy công khai. Khi deploy, đặt bốn biến `LLM_PROVIDER`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_BASE`, `NVIDIA_NIM_MODEL` trong secret manager của nền tảng.
