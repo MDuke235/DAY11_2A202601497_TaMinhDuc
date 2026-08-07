@@ -4,6 +4,7 @@ Lab 11 — Part 4: Human-in-the-Loop Design
   TODO 12: Design 3 HITL decision points
 """
 from dataclasses import dataclass
+import math
 
 
 # ============================================================
@@ -84,13 +85,59 @@ class ConfidenceRouter:
         #      action="escalate", priority="high",
         #      requires_human=True, reason="Low confidence — escalating"
 
+        try:
+            normalized_confidence = float(confidence)
+        except (TypeError, ValueError):
+            normalized_confidence = float("nan")
+
+        # Invalid confidence must fail closed instead of being treated as a
+        # high-confidence answer. Normalize the action name to avoid a casing
+        # variation bypassing the high-risk policy.
+        normalized_action = str(action_type).strip().casefold()
+        if (
+            not math.isfinite(normalized_confidence)
+            or not 0.0 <= normalized_confidence <= 1.0
+        ):
+            return RoutingDecision(
+                action="escalate",
+                confidence=normalized_confidence,
+                reason="Invalid confidence score -- escalating for human review",
+                priority="high",
+                requires_human=True,
+            )
+
+        if normalized_action in HIGH_RISK_ACTIONS:
+            return RoutingDecision(
+                action="escalate",
+                confidence=normalized_confidence,
+                reason=f"High-risk action: {normalized_action}",
+                priority="high",
+                requires_human=True,
+            )
+
+        if normalized_confidence >= self.HIGH_THRESHOLD:
+            return RoutingDecision(
+                action="auto_send",
+                confidence=normalized_confidence,
+                reason="High confidence response",
+                priority="low",
+                requires_human=False,
+            )
+        if normalized_confidence >= self.MEDIUM_THRESHOLD:
+            return RoutingDecision(
+                action="queue_review",
+                confidence=normalized_confidence,
+                reason="Medium confidence response needs reviewer confirmation",
+                priority="normal",
+                requires_human=True,
+            )
         return RoutingDecision(
-            action="auto_send",
-            confidence=confidence,
-            reason="TODO: implement routing logic",
-            priority="low",
-            requires_human=False,
-        )  # TODO: Replace with implementation
+            action="escalate",
+            confidence=normalized_confidence,
+            reason="Low confidence response -- escalating",
+            priority="high",
+            requires_human=True,
+        )
 
 
 # ============================================================
@@ -111,33 +158,39 @@ class ConfidenceRouter:
 hitl_decision_points = [
     {
         "id": 1,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "Transfer and beneficiary approval",
+        "trigger": "Any transfer_money request, a new beneficiary, or a material change to transfer amount or destination.",
+        "hitl_model": "human-in-the-loop",
+        "context_needed": "request_id, authenticated customer identity, source and destination accounts, beneficiary history, amount/currency, proposed transfer diff, fraud signals, and egress-policy result.",
+        "example": "Customer proposes a 50,000,000 VND transfer to a beneficiary added five minutes ago.",
+        "proposed_action": "Execute the transfer only after reviewer approval and a final deterministic egress-policy check.",
+        "approval_path": "Approve records reviewer ID and approval ID before execution; reject sends no transfer; timeout holds the request and expires it without execution.",
+        "audit_fields": "request_id, timestamp, user_id, intent, proposed action and diff, risk signals, reviewer_id, approval_id, decision, rationale, and timeout status.",
+        "audit_sink": "AuditLogPlugin record for request_id, exported to outputs/audit_log.json during the assignment suite.",
     },
     {
         "id": 2,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "Account closure and profile-change verification",
+        "trigger": "close_account, change_password, update_personal_info, or another irreversible account or identity change.",
+        "hitl_model": "human-as-tiebreaker",
+        "context_needed": "request_id, verified identity and authentication method, current versus requested profile values, account status, linked products, consent evidence, and recent account-takeover alerts.",
+        "example": "A chat request asks to close an account that still has a loan repayment and a newly changed phone number.",
+        "proposed_action": "Apply the requested closure or profile change only after the reviewer verifies identity, consent, and policy eligibility.",
+        "approval_path": "Approve only after identity and policy checks; reject preserves the current account state; timeout holds the request and routes it to secure support, never auto-executing it.",
+        "audit_fields": "request_id, timestamp, user_id, intent, current and proposed values, evidence reviewed, reviewer_id, decision, rationale, approval_id, and timeout outcome.",
+        "audit_sink": "AuditLogPlugin record for request_id, exported to outputs/audit_log.json during the assignment suite.",
     },
     {
         "id": 3,
-        "name": "TODO: Name this decision point",
-        "trigger": "TODO: When does this trigger?",
-        "hitl_model": "TODO: human-in-the-loop / human-on-the-loop / human-as-tiebreaker",
-        "context_needed": "TODO: What does the reviewer need to see?",
-        "example": "TODO: Give a concrete example scenario",
-        "approval_path": "TODO: Explain approve, reject and timeout behavior",
-        "audit_fields": "TODO: List correlation ID, intent, diff and reviewer decision",
+        "name": "Low-confidence or fraud-sensitive assistance",
+        "trigger": "Router confidence below 0.70, conflicting customer instructions, identity mismatch, or fraud/anomaly signal on a request that could mislead the customer.",
+        "hitl_model": "human-as-tiebreaker",
+        "context_needed": "request_id, user message, model response and confidence, retrieved-source provenance, account-risk alerts, relevant policy, and the proposed customer-facing reply.",
+        "example": "The model is 0.55 confident about an urgent request to change a transfer recipient after a suspicious login.",
+        "proposed_action": "Send only a reviewer-approved safe reply or escalate to support; never perform the requested side effect automatically.",
+        "approval_path": "Approve sends only the reviewed reply or next step; reject sends a safe escalation message; timeout keeps the action on hold and opens a support/security case.",
+        "audit_fields": "request_id, timestamp, confidence, model version, source provenance, proposed reply/action, reviewer_id, decision, rationale, escalation case ID, and timeout status.",
+        "audit_sink": "AuditLogPlugin record for request_id, exported to outputs/audit_log.json during the assignment suite.",
     },
 ]
 
