@@ -6,6 +6,10 @@ You may use Google ADK plugins, LangGraph, NeMo, or pure Python.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
+from urllib.parse import urlparse
+
 from assignment.rate_limiter import RateLimitPlugin
 from assignment.audit_log import AuditLogPlugin
 from assignment.monitoring import MonitoringAlert
@@ -19,7 +23,44 @@ def is_egress_allowed(destination: str, payload: str) -> bool:
     contain a password, API key, database host, phone number or email address.
     Do not let the LLM's prose decide this policy.
     """
-    raise NotImplementedError("Implement is_egress_allowed")
+    if not isinstance(destination, str) or not isinstance(payload, str):
+        return False
+
+    # Parse the URL rather than doing a substring comparison: an attacker can
+    # otherwise smuggle an untrusted host such as api.vinbank.example.evil.com.
+    try:
+        parsed = urlparse(destination)
+        port = parsed.port
+    except ValueError:
+        return False
+
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "api.vinbank.example"
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path != "/v1/transfers"
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+
+    normalized = unicodedata.normalize("NFKC", payload)
+    normalized = "".join(
+        char for char in normalized if unicodedata.category(char) != "Cf"
+    ).casefold()
+    sensitive_patterns = (
+        r"\badmin123\b",
+        r"\bsk-[a-z0-9-]+\b",
+        r"\b(?:[a-z0-9-]+\.)+(?:internal|local)(?::\d{2,5})?\b",
+        r"\b(?:password|m\u1eadt\s*kh\u1ea9u)\s*(?:(?:is\s+)|[:=]\s*)\S+",
+        r"(?<!\d)0\d{9,10}(?!\d)",
+        r"\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b",
+        r"(?<!\d)(?:\d{9}|\d{12})(?!\d)",
+    )
+    return not any(re.search(pattern, normalized, re.IGNORECASE) for pattern in sensitive_patterns)
 
 
 def build_production_plugins(

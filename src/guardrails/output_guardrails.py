@@ -5,8 +5,6 @@ Lab 11 — Part 2B: Output Guardrails
   TODO 6: Output Guardrail Plugin (ADK)
 """
 import re
-import textwrap
-
 from google.genai import types
 from google.adk.agents import llm_agent
 from google.adk import runners
@@ -36,11 +34,30 @@ def content_filter(response: str) -> dict:
     Returns:
         dict with 'safe', 'issues', and 'redacted' keys
     """
+    if not isinstance(response, str):
+        return {
+            "safe": False,
+            "issues": ["invalid_response: expected text"],
+            "redacted": "[REDACTED]",
+        }
+
     issues = []
     redacted = response
 
     # PII patterns to check
     PII_PATTERNS = {
+        # Vietnamese mobile (10 digits) and landline (11 digits). Boundaries
+        # prevent matching a longer national-ID number as a phone number.
+        "phone": r"(?<!\d)0\d{9,10}(?!\d)",
+        "email": r"\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b",
+        "national_id": r"(?<!\d)(?:\d{9}|\d{12})(?!\d)",
+        "api_key": r"\bsk-[a-zA-Z0-9-]+\b",
+        # Catch both conventional assignments and prose such as
+        # "password is admin123" from the intentionally unsafe agent.
+        "password": r"\bpassword\s*(?:(?:is\s+)|[:=]\s*)\S+",
+        # Internal service names are secrets too; this catches the database
+        # host in the lab prompt without treating public VinBank URLs as PII.
+        "internal_host": r"\b(?:[a-z0-9-]+\.)+(?:internal|local)(?::\d{2,5})?\b",
         # TODO: Add regex patterns for:
         # - VN phone number: r"0\d{9,10}"
         # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
@@ -97,7 +114,11 @@ If UNSAFE, add a brief reason on the next line.
 #     instruction=SAFETY_JUDGE_INSTRUCTION,
 # )
 
-safety_judge_agent = None  # TODO: Replace with implementation
+safety_judge_agent = llm_agent.LlmAgent(
+    model="gemini-2.0-flash",
+    name="safety_judge",
+    instruction=SAFETY_JUDGE_INSTRUCTION,
+)
 judge_runner = None
 
 
@@ -119,13 +140,24 @@ async def llm_safety_check(response_text: str) -> dict:
     Returns:
         dict with 'safe' (bool) and 'verdict' (str)
     """
-    if safety_judge_agent is None or judge_runner is None:
-        return {"safe": True, "verdict": "Judge not initialized — skipping"}
+    if safety_judge_agent is None:
+        return {"safe": False, "verdict": "UNSAFE: judge is unavailable"}
+    if judge_runner is None:
+        _init_judge()
+    if judge_runner is None:
+        return {"safe": False, "verdict": "UNSAFE: judge initialization failed"}
+
 
     prompt = f"Evaluate this AI response for safety:\n\n{response_text}"
-    verdict, _ = await chat_with_agent(safety_judge_agent, judge_runner, prompt)
-    is_safe = "SAFE" in verdict.upper() and "UNSAFE" not in verdict.upper()
-    return {"safe": is_safe, "verdict": verdict.strip()}
+    try:
+        verdict, _ = await chat_with_agent(safety_judge_agent, judge_runner, prompt)
+    except Exception as exc:
+        # An unavailable judge must not become an output-bypass condition.
+        return {"safe": False, "verdict": f"UNSAFE: judge failed ({exc})"}
+
+    cleaned_verdict = verdict.strip()
+    first_line = cleaned_verdict.splitlines()[0].strip().upper() if cleaned_verdict else ""
+    return {"safe": first_line == "SAFE", "verdict": cleaned_verdict}
 
 
 # ============================================================
@@ -145,10 +177,13 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
 
     def __init__(self, use_llm_judge=True):
         super().__init__(name="output_guardrail")
-        self.use_llm_judge = use_llm_judge and (safety_judge_agent is not None)
+        self.use_llm_judge = bool(use_llm_judge)
         self.blocked_count = 0
         self.redacted_count = 0
         self.total_count = 0
+
+        if self.use_llm_judge:
+            _init_judge()
 
     def _extract_text(self, llm_response) -> str:
         """Extract text from LLM response."""
@@ -158,6 +193,13 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
                 if hasattr(part, "text") and part.text:
                     text += part.text
         return text
+
+    @staticmethod
+    def _replace_text(llm_response, text: str) -> None:
+        """Replace the outgoing content while preserving a valid ADK shape."""
+        llm_response.content = types.Content(
+            role="model", parts=[types.Part.from_text(text=text)]
+        )
 
     async def after_model_callback(
         self,
@@ -172,16 +214,25 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        filtered = content_filter(response_text)
+        outgoing_text = filtered["redacted"]
+        if not filtered["safe"]:
+            self.redacted_count += 1
+            self._replace_text(llm_response, outgoing_text)
 
-        return llm_response  # TODO: modify if needed
+        if self.use_llm_judge:
+            # Give the separate LLM only the redacted text, so the safety
+            # check itself cannot become a new egress path for PII or secrets.
+            judge_result = await llm_safety_check(outgoing_text)
+            if not judge_result["safe"]:
+                self.blocked_count += 1
+                self._replace_text(
+                    llm_response,
+                    "I cannot provide that response. Please contact VinBank "
+                    "support for help with your banking request.",
+                )
+
+        return llm_response
 
 
 # ============================================================
