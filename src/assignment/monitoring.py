@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -36,11 +37,49 @@ class MonitoringAlert:
 
     def check_metrics(self) -> list[Alert]:
         """TODO: compute rates, append Alert objects when thresholds exceeded."""
-        raise NotImplementedError("Implement MonitoringAlert.check_metrics")
+        # Rebuild the current alert view, rather than accumulating duplicate
+        # alerts each time a dashboard polls these counters.
+        self.alerts.clear()
+        snapshot = self.snapshot()
+        checks = (
+            (
+                "block_rate",
+                snapshot["block_rate"],
+                self.block_rate_threshold,
+                "Blocked-request rate exceeds the configured threshold.",
+            ),
+            (
+                "rate_limit_hits",
+                self.rate_limit_hits,
+                self.rate_limit_hit_threshold,
+                "Rate-limit blocks exceed the configured threshold.",
+            ),
+            (
+                "judge_fail_rate",
+                snapshot["judge_fail_rate"],
+                self.judge_fail_rate_threshold,
+                "LLM judge failure rate exceeds the configured threshold.",
+            ),
+        )
+        for metric, value, threshold, message in checks:
+            if value >= threshold:
+                self.alerts.append(
+                    Alert(
+                        metric=metric,
+                        value=float(value),
+                        threshold=float(threshold),
+                        message=message,
+                    )
+                )
+        return list(self.alerts)
 
     def export_json(self, filepath: str = "outputs/metrics.json"):
         """TODO: write metrics + alerts to JSON."""
-        raise NotImplementedError("Implement MonitoringAlert.export_json")
+        self.check_metrics()
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.snapshot(), indent=2), encoding="utf-8")
+        return path
 
     def snapshot(self) -> dict:
         block_rate = (
